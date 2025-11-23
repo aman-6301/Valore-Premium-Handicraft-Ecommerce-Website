@@ -5,63 +5,106 @@ import Category from "../models/Category.js";
 // GET /api/products (listing + filters)
 export const getProducts = async (req, res) => {
   try {
-    const {
+    let {
       page = 1,
       limit = 12,
       sort,
       priceMin,
       priceMax,
-      category,
       material,
       artisan,
-      tags
+      tags,
+      category,
     } = req.query;
 
-    const filter = { isActive: true };
+    page = parseInt(page);
+    limit = parseInt(limit);
 
-    if (priceMin || priceMax) {
-      filter.price = {};
-      if (priceMin) filter.price.$gte = Number(priceMin);
-      if (priceMax) filter.price.$lte = Number(priceMax);
-    }
+    const matchStage = { isActive: true };
 
-    if (material) {
-      filter["meta.material"] = material;
-    }
-
-    if (artisan) {
-      filter["meta.artisan"] = artisan;
-    }
-
-    if (tags) {
-      filter.tags = { $in: tags.split(",") };
-    }
-
+    // Filter: Category
     if (category) {
-      const cat = await Category.findOne({ slug: category });
-      if (cat) {
-        filter.categoryId = cat._id;
+      const categoryDoc = await Category.findOne({ slug: category });
+      if (categoryDoc) {
+        matchStage.categoryId = categoryDoc._id;
       }
     }
 
-    const sortOptions = {
-      price_asc: { price: 1 },
-      price_desc: { price: -1 },
-      newest: { createdAt: -1 }
-    };
+    // Filter: Price range
+    if (priceMin || priceMax) {
+      matchStage.price = {};
+      if (priceMin) matchStage.price.$gte = Number(priceMin);
+      if (priceMax) matchStage.price.$lte = Number(priceMax);
+    }
 
-    const products = await Product.find(filter)
-      .sort(sortOptions[sort] || {})
-      .skip((page - 1) * limit)
-      .limit(Number(limit))
-      .select("name slug price images stock");
+    // Filter: Material
+    if (material) {
+      matchStage["meta.material"] = material;
+    }
+
+    // Filter: Artisan
+    if (artisan) {
+      matchStage["meta.artisan"] = { $regex: artisan, $options: "i" };
+    }
+
+    // Filter: Tags (comma-separated)
+    if (tags) {
+      const tagsArr = tags.split(",");
+      matchStage.tags = { $in: tagsArr };
+    }
+
+    // Sorting
+    let sortStage = {};
+    if (sort === "price_asc") sortStage.price = 1;
+    if (sort === "price_desc") sortStage.price = -1;
+    if (sort === "newest") sortStage.createdAt = -1;
+
+    const dataPipeline = [];
+
+    if (Object.keys(sortStage).length > 0) {
+      dataPipeline.push({ $sort: sortStage });
+    } else {
+      // default sort when no sort param is provided
+      dataPipeline.push({ $sort: { createdAt: -1 } });
+    }
+
+    dataPipeline.push(
+      { $skip: (page - 1) * limit },
+      { $limit: limit },
+      {
+        $lookup: {
+          from: "productimages",
+          localField: "images",
+          foreignField: "_id",
+          as: "images",
+        },
+      }
+    );
+
+    const pipeline = [
+      { $match: matchStage },
+      {
+        $facet: {
+          data: dataPipeline,
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ];
+
+    const result = await Product.aggregate(pipeline);
+
+    const products = result[0].data;
+    const totalCount = result[0].totalCount[0]?.count || 0;
 
     return res.json({
+      page,
+      limit,
+      totalPages: Math.ceil(totalCount / limit),
+      totalCount,
       products,
-      page: Number(page),
-      limit: Number(limit)
     });
   } catch (error) {
+    console.error("Aggregation error:", error);
     return res.status(500).json({ message: "Internal Server Error" });
   }
 };
@@ -81,14 +124,14 @@ export const getProductBySlug = async (req, res) => {
 
     const related = await Product.find({
       categoryId: product.categoryId,
-      _id: { $ne: product._id }
+      _id: { $ne: product._id },
     })
       .limit(4)
       .select("name slug price images");
 
     return res.json({
       product,
-      relatedProducts: related
+      relatedProducts: related,
     });
   } catch (error) {
     return res.status(500).json({ message: "Internal Server Error" });
@@ -108,16 +151,15 @@ export const getProductsByCategory = async (req, res) => {
 
     const products = await Product.find({
       categoryId: category._id,
-      isActive: true
+      isActive: true,
     })
       .select("name slug price images stock")
       .limit(20);
 
     return res.json({
       category: category.name,
-      products
+      products,
     });
-
   } catch (error) {
     return res.status(500).json({ message: "Internal Server Error" });
   }
@@ -151,8 +193,8 @@ export const searchProducts = async (req, res) => {
         { description: { $in: regexConditions } },
         { tags: { $in: regexConditions } },
         { "meta.material": { $in: regexConditions } },
-        { "meta.artisan": { $in: regexConditions } }
-      ]
+        { "meta.artisan": { $in: regexConditions } },
+      ],
     })
       .select("name slug price images stock")
       .limit(20);
@@ -160,12 +202,9 @@ export const searchProducts = async (req, res) => {
     return res.json({
       query,
       count: products.length,
-      products
+      products,
     });
-
   } catch (error) {
     return res.status(500).json({ message: "Internal Server Error" });
   }
 };
-
-
