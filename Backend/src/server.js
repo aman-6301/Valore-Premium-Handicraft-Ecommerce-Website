@@ -9,21 +9,28 @@ import authRoutes from "./routes/authRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import wishlistRoutes from "./routes/wishlistRoutes.js";
 
+import categoryRoutes from "./routes/categoryRoutes.js";
+import productRoutes from "./routes/productRoutes.js";
+
+
 const app = express();
 
 connectDB();
 
+app.use(express.json());
+app.use(cookieParser());
 app.use(cors({
   origin: "http://localhost:3000",
   credentials: true
 }));
-app.use(express.json());
-app.use(cookieParser());
 
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/users/wishlist", wishlistRoutes);
+app.use("/api/categories", categoryRoutes);
+app.use("/api/products", productRoutes);
+
 
 // Health check
 app.get("/health", (req, res) => {
